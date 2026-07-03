@@ -1,0 +1,129 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --brand-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a78bfa 100%);
+    --surface-card: rgba(30, 41, 59, 0.8);
+    --border-subtle: rgba(99, 102, 241, 0.2);
+  }
+
+  * { box-sizing: border-box; }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-surface-950 text-slate-100 font-sans antialiased;
+    background-image:
+      radial-gradient(ellipse at 20% 50%, rgba(99, 102, 241, 0.08) 0%, transparent 60%),
+      radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.06) 0%, transparent 50%);
+    min-height: 100vh;
+  }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-surface-900; }
+  ::-webkit-scrollbar-thumb { @apply bg-brand-700 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-brand-600; }
+}
+
+@layer components {
+  /* Cards */
+  .card {
+    @apply rounded-2xl border border-white/10 bg-surface-850/60 backdrop-blur-sm;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255,255,255,0.05);
+  }
+
+  .card-glow {
+    @apply card;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.3), 0 0 0 1px rgba(99,102,241,0.2), inset 0 1px 0 rgba(255,255,255,0.05);
+  }
+
+  /* Buttons */
+  .btn-primary {
+    @apply inline-flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-white
+           transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+    background: var(--brand-gradient);
+    box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+  }
+  .btn-primary:hover:not(:disabled) {
+    box-shadow: 0 6px 20px rgba(99, 102, 241, 0.6);
+    transform: translateY(-1px);
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-medium
+           bg-white/5 border border-white/10 text-slate-200 hover:bg-white/10
+           transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm
+           bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20
+           transition-all duration-200;
+  }
+
+  /* Drop zones */
+  .drop-zone {
+    @apply relative rounded-2xl border-2 border-dashed border-white/20 p-8
+           transition-all duration-300 cursor-pointer;
+    background: rgba(30, 41, 59, 0.3);
+  }
+  .drop-zone:hover, .drop-zone.active {
+    @apply border-brand-500;
+    background: rgba(99, 102, 241, 0.05);
+    box-shadow: inset 0 0 30px rgba(99, 102, 241, 0.08);
+  }
+
+  /* Progress bar */
+  .progress-track {
+    @apply h-2 rounded-full bg-white/10 overflow-hidden;
+  }
+  .progress-fill {
+    @apply h-full rounded-full transition-all duration-500 ease-out;
+    background: var(--brand-gradient);
+  }
+
+  /* Status badges */
+  .badge {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+  .badge-verified { @apply badge bg-emerald-500/15 text-emerald-400 border border-emerald-500/30; }
+  .badge-rejected { @apply badge bg-red-500/15 text-red-400 border border-red-500/30; }
+  .badge-pending  { @apply badge bg-amber-500/15 text-amber-400 border border-amber-500/30; }
+
+  /* Input fields */
+  .input-field {
+    @apply w-full bg-surface-900/60 border border-white/10 rounded-xl px-4 py-3
+           text-slate-100 placeholder-slate-500 outline-none
+           focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20
+           transition-all duration-200;
+  }
+
+  /* Stage indicator */
+  .stage-dot {
+    @apply w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold
+           transition-all duration-300;
+  }
+  .stage-dot.done    { @apply bg-emerald-500 text-white; }
+  .stage-dot.active  { @apply bg-brand-500 text-white animate-pulse-glow; }
+  .stage-dot.pending { @apply bg-white/10 text-slate-500; }
+}
+
+/* Markdown preview styles */
+.prose-dark {
+  @apply text-slate-200;
+}
+.prose-dark h1 { @apply text-2xl font-bold text-white mb-4 mt-6; }
+.prose-dark h2 { @apply text-xl font-semibold text-slate-100 mb-3 mt-5 pb-2 border-b border-white/10; }
+.prose-dark h3 { @apply text-lg font-medium text-slate-200 mb-2 mt-4; }
+.prose-dark p  { @apply text-slate-300 leading-relaxed mb-3; }
+.prose-dark strong { @apply text-slate-100 font-semibold; }
+.prose-dark em { @apply text-slate-300 italic; }
+.prose-dark ol { @apply list-decimal list-inside text-slate-300 space-y-1 mb-3 pl-4; }
+.prose-dark ul { @apply list-disc list-inside text-slate-300 space-y-1 mb-3 pl-4; }
+.prose-dark code { @apply bg-surface-800 px-1.5 py-0.5 rounded text-brand-300 text-sm font-mono; }
