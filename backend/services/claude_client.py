@@ -1,13 +1,11 @@
 """
-claude_client.py — Anthropic Claude client for Stage 2 (extraction) and Stage 6a (generation).
+claude_client.py — Generation and Extraction client supporting fallback to OpenAI.
 
-Key behaviors:
-- Stage 2: Returns strict PaperExtraction JSON. On Pydantic validation failure,
-  retries once with a corrective re-prompt. On second failure, drops only the
-  invalid claims (not the whole paper) and logs them.
-- Stage 5: Batched comparison — up to 10 project claims per call.
-- Stage 6a: Drafts paper sentences with cited claim IDs.
-- All calls log token usage to the LLMUsage table via a provided db session.
+If settings.anthropic_api_key is empty/missing, calls fall back to OpenAI's
+gpt-4o (configured in fallback_generation_model).
+This ensures developers without Anthropic credits can run the pipeline with only
+an OpenAI key, while still keeping generation (gpt-4o) and verification (gpt-4o-mini)
+separated to maintain validation independence.
 """
 from __future__ import annotations
 
@@ -16,6 +14,7 @@ import logging
 from typing import Optional
 
 import anthropic
+import openai
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -31,19 +30,29 @@ from models.schemas import (
 
 logger = logging.getLogger(__name__)
 
-client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+# Initialize clients
+anthropic_client = None
+if settings.anthropic_api_key and settings.anthropic_api_key.strip() and "your_anthropic" not in settings.anthropic_api_key:
+    try:
+        anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        logger.info("Anthropic client initialized.")
+    except Exception as e:
+        logger.warning(f"Failed to initialize Anthropic client: {e}. Will fall back to OpenAI.")
 
-# Published pricing (as of mid-2025) for cost estimation
-# claude-sonnet-4-5: $3/1M input, $15/1M output
-COST_PER_1M_INPUT = 3.0
-COST_PER_1M_OUTPUT = 15.0
+openai_client = openai.OpenAI(api_key=settings.openai_api_key)
 
 
-def _log_usage(db: Session, stage: str, model: str, usage: anthropic.types.Usage):
-    prompt_tokens = usage.input_tokens
-    completion_tokens = usage.output_tokens
-    cost = (prompt_tokens / 1_000_000) * COST_PER_1M_INPUT + \
-           (completion_tokens / 1_000_000) * COST_PER_1M_OUTPUT
+def _log_api_usage(db: Session, stage: str, model: str, prompt_tokens: int, completion_tokens: int):
+    # Pricing for cost estimation (mid-2025 rates per 1M tokens)
+    if "claude" in model.lower():
+        input_cost = 3.0
+        output_cost = 15.0
+    else:  # gpt-4o
+        input_cost = 5.0
+        output_cost = 15.0
+
+    cost = (prompt_tokens / 1_000_000) * input_cost + \
+           (completion_tokens / 1_000_000) * output_cost
     db.add(LLMUsage(
         stage=stage,
         model=model,
@@ -52,6 +61,59 @@ def _log_usage(db: Session, stage: str, model: str, usage: anthropic.types.Usage
         estimated_cost_usd=cost,
     ))
     db.commit()
+
+
+def _call_llm(
+    db: Session,
+    stage: str,
+    system: str,
+    prompt: str,
+    messages: list[dict] = None,
+    max_tokens: int = 4096
+) -> str:
+    """
+    Calls the configured LLM. Falls back to OpenAI if Anthropic is not available.
+    """
+    if anthropic_client:
+        msg_list = messages if messages else [{"role": "user", "content": prompt}]
+        try:
+            response = anthropic_client.messages.create(
+                model=settings.claude_model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=msg_list,
+            )
+            _log_api_usage(
+                db, stage, settings.claude_model,
+                response.usage.input_tokens, response.usage.output_tokens
+            )
+            return response.content[0].text.strip()
+        except Exception as e:
+            logger.error(f"Anthropic API call failed: {e}. Falling back to OpenAI...")
+
+    # Fallback to OpenAI gpt-4o
+    if not messages:
+        msg_list = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt}
+        ]
+    else:
+        msg_list = [{"role": "system", "content": system}]
+        for m in messages:
+            msg_list.append({"role": m["role"], "content": m["content"]})
+
+    response = openai_client.chat.completions.create(
+        model=settings.fallback_generation_model,
+        max_tokens=max_tokens,
+        messages=msg_list,
+        temperature=0.2 if "stage6a" in stage else 0.0,
+        response_format={"type": "json_object"},
+    )
+    _log_api_usage(
+        db, stage, settings.fallback_generation_model,
+        response.usage.prompt_tokens, response.usage.completion_tokens
+    )
+    return response.choices[0].message.content.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -104,18 +166,11 @@ def extract_paper(db: Session, paper_text: str, paper_id: int) -> tuple[PaperExt
     Returns (PaperExtraction, list_of_dropped_claims).
     Dropped claims are logged to clarification_requests by the router.
     """
-    prompt = EXTRACTION_PROMPT.format(paper_text=paper_text[:80_000])  # token guard
+    # claude_client.py, line ~169
+    prompt = EXTRACTION_PROMPT.replace("{paper_text}", paper_text[:80_000]) # token guard
 
     # First attempt
-    response = client.messages.create(
-        model=settings.claude_model,
-        max_tokens=4096,
-        system=EXTRACTION_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    _log_usage(db, "stage2", settings.claude_model, response.usage)
-
-    raw = response.content[0].text.strip()
+    raw = _call_llm(db, "stage2", EXTRACTION_SYSTEM, prompt, max_tokens=4096)
     try:
         return _parse_and_validate(raw), []
     except (ValidationError, json.JSONDecodeError) as e:
@@ -123,19 +178,12 @@ def extract_paper(db: Session, paper_text: str, paper_id: int) -> tuple[PaperExt
 
     # Second attempt with corrective re-prompt
     correction = CORRECTION_PROMPT.format(errors=str(e), paper_text=paper_text[:80_000])
-    response2 = client.messages.create(
-        model=settings.claude_model,
-        max_tokens=4096,
-        system=EXTRACTION_SYSTEM,
-        messages=[
-            {"role": "user", "content": prompt},
-            {"role": "assistant", "content": raw},
-            {"role": "user", "content": correction},
-        ],
-    )
-    _log_usage(db, "stage2_retry", settings.claude_model, response2.usage)
-
-    raw2 = response2.content[0].text.strip()
+    messages = [
+        {"role": "user", "content": prompt},
+        {"role": "assistant", "content": raw},
+        {"role": "user", "content": correction},
+    ]
+    raw2 = _call_llm(db, "stage2_retry", EXTRACTION_SYSTEM, "", messages=messages, max_tokens=4096)
     try:
         return _parse_and_validate(raw2), []
     except (ValidationError, json.JSONDecodeError) as e2:
@@ -224,19 +272,12 @@ def compare_claims_batch(
     claims: list[dict],  # [{"id": int, "text": str}]
     evidence: list[dict],  # [{"project_claim_id": int, "similar": [{"claim_text", "paper_id"}]}]
 ) -> BatchComparisonOutput:
-    prompt = COMPARISON_PROMPT.format(
-        claims_json=json.dumps(claims, indent=2),
-        evidence_json=json.dumps(evidence, indent=2),
-    )
-    response = client.messages.create(
-        model=settings.claude_model,
-        max_tokens=2048,
-        system=COMPARISON_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    _log_usage(db, "stage5", settings.claude_model, response.usage)
-
-    raw = response.content[0].text.strip()
+    prompt = (
+    COMPARISON_PROMPT
+    .replace("{claims_json}", json.dumps(claims, indent=2))
+    .replace("{evidence_json}", json.dumps(evidence, indent=2))
+)
+    raw = _call_llm(db, "stage5", COMPARISON_SYSTEM, prompt, max_tokens=2048)
     try:
         return _parse_comparison(raw)
     except Exception as e:
@@ -300,19 +341,12 @@ def generate_paper_draft(
     Returns {section: [{"text": str, "cited_claim_ids": [int]}]}
     Parses inline [CLAIM:id] citations into cited_claim_ids list.
     """
-    prompt = GENERATION_PROMPT.format(
-        claims_json=json.dumps(claims, indent=2),
-        project_context=project_context[:8000],
+    prompt = (
+    GENERATION_PROMPT
+    .replace("{claims_json}", json.dumps(claims, indent=2))
+    .replace("{project_context}", project_context[:8000])
     )
-    response = client.messages.create(
-        model=settings.claude_model,
-        max_tokens=6000,
-        system=GENERATION_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    _log_usage(db, "stage6a", settings.claude_model, response.usage)
-
-    raw = response.content[0].text.strip()
+    raw = _call_llm(db, "stage6a", GENERATION_SYSTEM, prompt, max_tokens=4096)
     return _parse_generation(raw)
 
 

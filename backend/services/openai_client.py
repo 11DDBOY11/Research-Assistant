@@ -126,7 +126,7 @@ def verify_sentences_batch(
     Verify up to 10 sentences per call.
     items: each item has a sentence and its cited source texts to check against.
     """
-    prompt = VERIFY_PROMPT.format(items_json=json.dumps(items, indent=2))
+    prompt = VERIFY_PROMPT.replace("{items_json}", json.dumps(items, indent=2))
 
     response = client.chat.completions.create(
         model=settings.openai_verify_model,

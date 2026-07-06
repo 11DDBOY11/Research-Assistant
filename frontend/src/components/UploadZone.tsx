@@ -1,7 +1,7 @@
 'use client';
 import React, { useCallback, useState } from 'react';
-import { useDropzone } from 'react-dropzone';
-import { Upload, FileText, X, CheckCircle, AlertCircle, BookOpen, FolderOpen } from 'lucide-react';
+import { useDropzone, FileRejection } from 'react-dropzone';
+import { Upload, CheckCircle, AlertCircle, BookOpen, FolderOpen } from 'lucide-react';
 
 interface Props {
   role: 'literature' | 'project';
@@ -25,10 +25,34 @@ export default function UploadZone({ role, onUpload, maxFiles = 15, currentCount
 
   const isLiterature = role === 'literature';
 
-  const onDrop = useCallback(async (accepted: File[]) => {
-    if (!accepted.length) return;
+  const MAX_SIZE_BYTES = 20 * 1024 * 1024; // 20MB, matches UI label below
+
+  const onDrop = useCallback(async (accepted: File[], rejected: FileRejection[]) => {
     setError(null);
     setSuccessMsg(null);
+
+    if (rejected.length > 0) {
+      const reasons = rejected.map((r) => r.errors[0]?.code);
+      const msg = reasons.includes('file-too-large')
+        ? 'One or more files exceed the 20MB limit.'
+        : reasons.includes('file-invalid-type')
+          ? 'Only PDF, TXT, or DOCX files are allowed.'
+          : 'Some files were rejected.';
+      setError(msg);
+    }
+
+    if (isLiterature && currentCount + accepted.length > maxCount) {
+      const allowed = Math.max(maxCount - currentCount, 0);
+      setError(
+        allowed === 0
+          ? `Limit reached: ${maxCount} files max.`
+          : `Only ${allowed} more file${allowed > 1 ? 's' : ''} allowed (${maxCount} max).`
+      );
+      accepted = accepted.slice(0, allowed);
+    }
+
+    if (!accepted.length) return;
+
     setUploading(true);
     try {
       await onUpload(accepted);
@@ -42,13 +66,14 @@ export default function UploadZone({ role, onUpload, maxFiles = 15, currentCount
     } finally {
       setUploading(false);
     }
-  }, [onUpload, isLiterature]);
+  }, [onUpload, isLiterature, currentCount, maxCount]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: ACCEPT,
     multiple: isLiterature,
     maxFiles: isLiterature ? maxFiles : 1,
+    maxSize: MAX_SIZE_BYTES,
     disabled: disabled || uploading,
   });
 

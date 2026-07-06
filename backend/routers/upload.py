@@ -225,6 +225,15 @@ def get_upload_status(db: Session = Depends(get_db)):
         "literature_files": [{"id": p.id, "filename": p.filename, "status": p.status} for p in literature],
     }
 
+@router.delete("/upload/{paper_id}")
+def delete_paper(paper_id: int, db: Session = Depends(get_db)):
+    paper = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="File not found")
+    db.query(Page).filter(Page.paper_id == paper_id).delete()
+    db.delete(paper)
+    db.commit()
+    return {"deleted": paper_id}
 
 @router.delete("/reset")
 def reset_session(db: Session = Depends(get_db)):
